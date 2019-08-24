@@ -40,6 +40,9 @@ This is the url to get a request/response from.
 The user agent to use as part of the request. Defaults to 'chocolatey
 command line'.
 
+.PARAMETER Options
+OPTIONAL - Specify custom headers.
+
 .PARAMETER IgnoredArguments
 Allows splatting with arguments that do not apply. Do not use directly.
 
@@ -55,6 +58,7 @@ Get-WebFile
 param(
   [parameter(Mandatory=$false, Position=0)][string] $url = '',
   [parameter(Mandatory=$false, Position=1)][string] $userAgent = 'chocolatey command line',
+  [parameter(Mandatory=$false)][hashtable] $options = @{Headers=@{}},
   [parameter(ValueFromRemainingArguments = $true)][Object[]] $ignoredArguments
 )
 
@@ -130,6 +134,61 @@ param(
   if ($userAgent -ne $null) {
     Write-Debug "Setting the UserAgent to `'$userAgent`'"
     $request.UserAgent = $userAgent
+  }
+
+  if ($options.Headers.Count -gt 0) {
+    Write-Debug "Setting custom headers"
+    foreach ($item in $options.Headers.GetEnumerator()) {
+      $uri = (new-object system.uri $url)
+      Write-Debug($item.Key + ':' + $item.Value)
+      switch ($item.Key) {
+        'Accept' {$request.Accept = $item.Value}
+        'Cookie' {$request.CookieContainer.SetCookies($uri, $item.Value)}
+        'Referer' {$request.Referer = $item.Value}
+        'User-Agent' {$request.UserAgent = $item.Value}
+        'Range' {
+          # Range header has to be added by AddRequest method see: https://docs.microsoft.com/en-us/dotnet/api/system.net.httpwebrequest.headers?view=netframework-4.8#remarks
+          # String has to be parsed into Int32, because having two parameters (-BeginRange, -EndRange) would be overkill
+          $range = $null
+          $cleanedItem = $item.Value -replace "\s",""
+
+          try
+          {
+            $splittedItems = $cleanedItem -split '-'
+            if($cleanedItem -match "^\d+-\d+$")
+            {
+              $range = $splittedItems | ForEach-Object { [Int32]::Parse($_) }
+            }
+            elseif(($cleanedItem -match "^\d+-$") -or ($cleanedItem -match "^\d+$"))
+            {
+              $range = [Int32]::Parse($splittedItems[0])
+            }
+            elseif($cleanedItem -match "^-\d+$")
+            {
+              $range = [Int32]::Parse('-' + $splittedItems[1])
+            }
+            else
+            {
+              throw "Range header was given, but the format does not fit. Valid formats are e.g. '0-100', '200-', '-300', '400'."
+            }
+          }
+          catch
+          {
+            throw "Error parsing range header - $($_.Exception.Message)"
+          }
+
+          if($range.Count -eq 1)
+          {
+            $request.AddRange($range)
+          }
+          else
+          {
+            $request.AddRange($range[0], $range[1])
+          }
+        }
+        Default {$request.Headers.Add($item.Key, $item.Value)}
+      }
+    }
   }
 
   Write-Debug "Request Headers:"

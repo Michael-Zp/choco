@@ -303,8 +303,8 @@ param(
   $headers = @{}
   if ($url.StartsWith('http')) {
     try {
-      $headers = Get-WebHeaders -Url $url -ErrorAction "Stop"
-    } catch {
+      $headers = Get-WebHeaders -Url $url -ErrorAction "Stop" -Options $options
+      } catch {
       if ($PSVersionTable.PSVersion -lt (New-Object 'Version' 3,0)) {
         Write-Debug "Converting Security Protocol to SSL3 only for Powershell v2"
         # this should last for the entire duration

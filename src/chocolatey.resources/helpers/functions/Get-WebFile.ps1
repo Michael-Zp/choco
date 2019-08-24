@@ -131,13 +131,13 @@ param(
       $passwd = ConvertTo-SecureString $explicitProxyPassword -AsPlainText -Force
 	    $proxy.Credentials = New-Object System.Management.Automation.PSCredential ($explicitProxyUser, $passwd)
 	  }
-    
+
     if ($explicitProxyBypassList -ne $null -and $explicitProxyBypassList -ne '') {
       $proxy.BypassList =  $explicitProxyBypassList.Split(',', [System.StringSplitOptions]::RemoveEmptyEntries)
     }
     if ($explicitProxyBypassOnLocal -eq 'true') { $proxy.BypassProxyOnLocal = $true; }
 
- 	  Write-Host "Using explicit proxy server '$explicitProxy'."
+      Write-Host "Using explicit proxy server '$explicitProxy'."
     $req.Proxy = $proxy
   } elseif ($webclient.Proxy -and !$webclient.Proxy.IsBypassed($url)) {
 	  # system proxy (pass through)
@@ -187,6 +187,46 @@ param(
         'Cookie' {$req.CookieContainer.SetCookies($uri, $item.Value)}
         'Referer' {$req.Referer = $item.Value}
         'User-Agent' {$req.UserAgent = $item.Value}
+        'Range' {
+          # Range header has to be added by AddRequest method see: https://docs.microsoft.com/en-us/dotnet/api/system.net.httpwebrequest.headers?view=netframework-4.8#remarks
+          # String has to be parsed into Int32, because having two parameters (-BeginRange, -EndRange) would be overkill
+          $range = $null
+          $cleanedItem = $item.Value -replace "\s",""
+
+          try
+          {
+            $splittedItems = $cleanedItem -split '-'
+            if($cleanedItem -match "^\d+-\d+$")
+            {
+              $range = $splittedItems | ForEach-Object { [Int32]::Parse($_) }
+            }
+            elseif(($cleanedItem -match "^\d+-$") -or ($cleanedItem -match "^\d+$"))
+            {
+              $range = [Int32]::Parse($splittedItems[0])
+            }
+            elseif($cleanedItem -match "^-\d+$")
+            {
+              $range = [Int32]::Parse('-' + $splittedItems[1])
+            }
+            else
+            {
+              throw "Range header was given, but the format does not fit. Valid formats are e.g. '0-100', '200-', '-300', '400'."
+            }
+          }
+          catch
+          {
+            throw "Error parsing range header - $($_.Exception.Message)"
+          }
+
+          if($range.Count -eq 1)
+          {
+            $req.AddRange($range)
+          }
+          else
+          {
+            $req.AddRange($range[0], $range[1])
+          }
+        }
         Default {$req.Headers.Add($item.Key, $item.Value)}
       }
     }
@@ -246,15 +286,16 @@ param(
       [string]$output = ""
     }
 
-    if($res.StatusCode -eq 401 -or $res.StatusCode -eq 403 -or $res.StatusCode -eq 404) {
+    if(([System.Net.HttpStatusCode]::Unauthorized, [System.Net.HttpStatusCode]::Forbidden, [System.Net.HttpStatusCode]::NotFound) -contains $res.StatusCode) {
       $env:ChocolateyExitCode = $res.StatusCode
       throw "Remote file either doesn't exist, is unauthorized, or is forbidden for '$url'."
     }
 
-    if($res.StatusCode -eq 200) {
+    if(([System.Net.HttpStatusCode]::OK, [System.Net.HttpStatusCode]::PartialContent) -contains $res.StatusCode) {
       [long]$goal = $res.ContentLength
       $goalFormatted = Format-FileSize $goal
       $reader = $res.GetResponseStream()
+
 
       if ($fileName) {
         $fileDirectory = $([System.IO.Path]::GetDirectoryName($fileName))
